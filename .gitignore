@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Python virtual environment
+venv/
+backend/venv/
+
+# Environment variables / API keys
+.env
+backend/.env
+
+# Flutter
+frontend/.dart_tool/
+frontend/build/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
