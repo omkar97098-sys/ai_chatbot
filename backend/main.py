@@ -22,12 +22,14 @@ app.add_middleware(
 # Get OpenRouter API key from .env
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
 
 # Home endpoint
 @app.get("/")
 def home():
     return {
-        "message": "AI Chatbot Backend is running!"
+        "message": "AI Chatbot V2 Backend is running!"
     }
 
 
@@ -35,16 +37,15 @@ def home():
 @app.get("/chat")
 def chat(message: str):
 
-    # Check whether API key exists
+    # Check API key
     if not API_KEY:
         return {
             "error": "OPENROUTER_API_KEY is missing from .env"
         }
 
     try:
-        # Send message to OpenRouter
         response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
+            OPENROUTER_URL,
 
             headers={
                 "Authorization": f"Bearer {API_KEY}",
@@ -53,10 +54,19 @@ def chat(message: str):
 
             json={
                 "model": "openrouter/free",
+
                 "messages": [
                     {
                         "role": "user",
                         "content": message
+                    }
+                ],
+
+                # Enable OpenRouter web search
+                "plugins": [
+                    {
+                        "id": "web",
+                        "max_results": 3
                     }
                 ]
             },
@@ -64,7 +74,6 @@ def chat(message: str):
             timeout=60
         )
 
-        # Convert response to JSON
         data = response.json()
 
         # Handle OpenRouter errors
@@ -73,9 +82,11 @@ def chat(message: str):
                 "error": data
             }
 
-        # Return AI response
+        # Get AI response
+        ai_message = data["choices"][0]["message"]["content"]
+
         return {
-            "message": data["choices"][0]["message"]["content"]
+            "message": ai_message
         }
 
     except requests.exceptions.RequestException as e:
@@ -86,4 +97,4 @@ def chat(message: str):
     except Exception as e:
         return {
             "error": f"Unexpected error: {str(e)}"
-        }
+        } 
