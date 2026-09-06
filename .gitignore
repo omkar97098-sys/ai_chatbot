@@ -20,4 +20,5 @@ frontend/build/
 
 # OS
 .DS_Store
-Thumbs.db
+Thumbs.dbbackend/ai_chatbot.db
+backend/ai_chatbot.db
