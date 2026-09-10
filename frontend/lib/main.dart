@@ -5,6 +5,8 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:flutter_tts/flutter_tts.dart';
 
 import 'auth_service.dart';
 import 'login_page.dart';
@@ -629,16 +631,19 @@ class _NexaHomeState extends State<NexaHome> {
           child: SafeArea(
             child: Row(
               children: [
-                NavigationRail(
-                  selectedIndex: _selectedPage,
-                  onDestinationSelected: (index) {
-                    setState(() {
-                      _selectedPage = index;
-                    });
-                  },
-                  labelType:
-                      NavigationRailLabelType.all,
-                  destinations: const [
+                Column(
+                  children: [
+                    Expanded(
+                      child: NavigationRail(
+                        selectedIndex: _selectedPage,
+                        onDestinationSelected: (index) {
+                          setState(() {
+                            _selectedPage = index;
+                          });
+                        },
+                        labelType:
+                            NavigationRailLabelType.all,
+                        destinations: const [
                     NavigationRailDestination(
                       icon: Icon(
                         Icons.chat_bubble_outline,
@@ -674,6 +679,17 @@ class _NexaHomeState extends State<NexaHome> {
                         Icons.settings,
                       ),
                       label: Text('Settings'),
+                    ),
+                        ],
+                      ),
+                    ),
+
+                    UserProfileCard(
+                      name: _userName,
+                      email: _userEmail,
+                      isGuest: widget.isGuest,
+                      profileImageBase64: _profileImageBase64,
+                      avatarIndex: _avatar,
                     ),
                   ],
                 ),
@@ -809,7 +825,13 @@ class _ChatPageState extends State<ChatPage> {
 
   late List<ChatMessage> _messages;
 
+  final stt.SpeechToText _speech = stt.SpeechToText();
+  final FlutterTts _tts = FlutterTts();
+
   bool _sending = false;
+  bool _speechAvailable = false;
+  bool _isListening = false;
+  bool _isSpeaking = false;
 
   @override
   void initState() {
@@ -817,6 +839,9 @@ class _ChatPageState extends State<ChatPage> {
 
     _messages =
         List.from(widget.messages);
+
+    _initializeSpeech();
+    _initializeTts();
   }
 
   @override
@@ -834,10 +859,179 @@ class _ChatPageState extends State<ChatPage> {
 
   @override
   void dispose() {
+    _speech.stop();
+    _tts.stop();
     _controller.dispose();
     _scrollController.dispose();
 
     super.dispose();
+  }
+
+  // ==========================================================
+  // SPEECH INITIALIZATION
+  // ==========================================================
+
+  Future<void> _initializeSpeech() async {
+    try {
+      final available = await _speech.initialize(
+        onStatus: (status) {
+          if (!mounted) return;
+          setState(() {
+            _isListening = status == 'listening';
+          });
+        },
+        onError: (_) {
+          if (!mounted) return;
+          setState(() {
+            _isListening = false;
+          });
+        },
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _speechAvailable = available;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _speechAvailable = false;
+      });
+    }
+  }
+
+  Future<void> _initializeTts() async {
+    try {
+      await _tts.setLanguage('en-US');
+      await _tts.setSpeechRate(0.5);
+      await _tts.setVolume(1.0);
+      await _tts.setPitch(1.0);
+
+      _tts.setStartHandler(() {
+        if (!mounted) return;
+        setState(() {
+          _isSpeaking = true;
+        });
+      });
+
+      _tts.setCompletionHandler(() {
+        if (!mounted) return;
+        setState(() {
+          _isSpeaking = false;
+        });
+      });
+
+      _tts.setCancelHandler(() {
+        if (!mounted) return;
+        setState(() {
+          _isSpeaking = false;
+        });
+      });
+
+      _tts.setErrorHandler((_) {
+        if (!mounted) return;
+        setState(() {
+          _isSpeaking = false;
+        });
+      });
+    } catch (_) {}
+  }
+
+  // ==========================================================
+  // SPEECH TO TEXT
+  // ==========================================================
+
+  Future<void> _toggleListening() async {
+    if (!_speechAvailable || _sending) return;
+
+    if (_isListening) {
+      await _speech.stop();
+      if (!mounted) return;
+      setState(() {
+        _isListening = false;
+      });
+      return;
+    }
+
+    try {
+      await _speech.listen(
+        onResult: (result) {
+          if (!mounted) return;
+          setState(() {
+            _controller.text = result.recognizedWords;
+            _controller.selection = TextSelection.fromPosition(
+              TextPosition(offset: _controller.text.length),
+            );
+          });
+        },
+        listenOptions: stt.SpeechListenOptions(
+          partialResults: true,
+          cancelOnError: true,
+          listenMode: stt.ListenMode.confirmation,
+          listenFor: const Duration(seconds: 30),
+          pauseFor: const Duration(seconds: 3),
+        ),
+      );
+
+      if (!mounted) return;
+      setState(() {
+        _isListening = true;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not start the microphone.'),
+        ),
+      );
+    }
+  }
+
+  // ==========================================================
+  // TEXT TO SPEECH - REPLAY ANY NEXA MESSAGE
+  // ==========================================================
+
+  String _plainTextForSpeech(String text) {
+    return text
+        .replaceAll(RegExp(r'```[\s\S]*?```'), ' ')
+        .replaceAll(RegExp(r'`([^`]*)`'), r'$1')
+        .replaceAll(RegExp(r'[*_#~]'), '')
+        .replaceAll(RegExp(r'\[([^\]]+)\]\([^\)]+\)'), r'$1')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  Future<void> _speak(String text) async {
+    final speechText = _plainTextForSpeech(text);
+    if (speechText.isEmpty) return;
+
+    try {
+      await _tts.stop();
+      if (mounted) {
+        setState(() {
+          _isSpeaking = true;
+        });
+      }
+      await _tts.speak(speechText);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _isSpeaking = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not play this message.'),
+        ),
+      );
+    }
+  }
+
+  Future<void> _stopSpeaking() async {
+    await _tts.stop();
+    if (!mounted) return;
+    setState(() {
+      _isSpeaking = false;
+    });
   }
 
   // ==========================================================
@@ -1044,8 +1238,8 @@ class _ChatPageState extends State<ChatPage> {
                   itemBuilder:
                       (context, index) {
                     return MessageBubble(
-                      message:
-                          _messages[index],
+                      message: _messages[index],
+                      onSpeak: _speak,
                     );
                   },
                 ),
@@ -1062,36 +1256,26 @@ class _ChatPageState extends State<ChatPage> {
 
         // INPUT
         Padding(
-          padding:
-              const EdgeInsets.fromLTRB(
-            16,
-            8,
-            16,
-            16,
-          ),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
           child: Row(
-            crossAxisAlignment:
-                CrossAxisAlignment.end,
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Expanded(
                 child: TextField(
-                  controller:
-                      _controller,
+                  controller: _controller,
                   minLines: 1,
                   maxLines: 6,
-                  decoration:
-                      InputDecoration(
-                    hintText:
-                        'Message NEXA AI...',
+                  decoration: InputDecoration(
+                    hintText: _isListening
+                        ? 'Listening... speak now'
+                        : 'Message NEXA AI...',
+                    prefixIcon: _isListening
+                        ? const Icon(Icons.mic, size: 21)
+                        : null,
                     filled: true,
-                    border:
-                        OutlineInputBorder(
-                      borderRadius:
-                          BorderRadius.circular(
-                        22,
-                      ),
-                      borderSide:
-                          BorderSide.none,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: BorderSide.none,
                     ),
                   ),
                   onSubmitted: (_) {
@@ -1100,17 +1284,34 @@ class _ChatPageState extends State<ChatPage> {
                 ),
               ),
 
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
+
+              IconButton(
+                tooltip: _isListening
+                    ? 'Stop recording'
+                    : 'Voice input',
+                onPressed: (_sending || !_speechAvailable)
+                    ? null
+                    : _toggleListening,
+                icon: Icon(
+                  _isListening ? Icons.stop_circle : Icons.mic,
+                ),
+              ),
+
+              if (_isSpeaking)
+                IconButton(
+                  tooltip: 'Stop speaking',
+                  onPressed: _stopSpeaking,
+                  icon: const Icon(Icons.stop),
+                ),
+
+              const SizedBox(width: 2),
 
               FloatingActionButton(
+                heroTag: 'nexa_send_fab',
                 mini: true,
-                onPressed:
-                    _sending
-                        ? null
-                        : _sendMessage,
-                child: const Icon(
-                  Icons.send,
-                ),
+                onPressed: _sending ? null : _sendMessage,
+                child: const Icon(Icons.send),
               ),
             ],
           ),
@@ -1155,56 +1356,157 @@ class _ChatPageState extends State<ChatPage> {
 }
 
 // ============================================================
+// BOTTOM-LEFT USER PROFILE CARD
+// ============================================================
+
+class UserProfileCard extends StatelessWidget {
+  final String name;
+  final String email;
+  final bool isGuest;
+  final String? profileImageBase64;
+  final int avatarIndex;
+
+  const UserProfileCard({
+    super.key,
+    required this.name,
+    required this.email,
+    required this.isGuest,
+    required this.profileImageBase64,
+    required this.avatarIndex,
+  });
+
+  static const List<_AvatarOption> _avatars = [
+    _AvatarOption(emoji: '🤖', name: 'NEXA Bot', icon: Icons.smart_toy_rounded),
+    _AvatarOption(emoji: '🧑‍🚀', name: 'Cosmo', icon: Icons.rocket_launch_rounded),
+    _AvatarOption(emoji: '🦾', name: 'Cyber', icon: Icons.precision_manufacturing_rounded),
+    _AvatarOption(emoji: '🧙', name: 'Wizard', icon: Icons.auto_awesome_rounded),
+    _AvatarOption(emoji: '🦊', name: 'Fox', icon: Icons.pets_rounded),
+    _AvatarOption(emoji: '🐼', name: 'Panda', icon: Icons.face_rounded),
+  ];
+
+  Widget _avatar(BuildContext context) {
+    if (profileImageBase64 != null && profileImageBase64!.isNotEmpty) {
+      try {
+        return CircleAvatar(
+          radius: 20,
+          backgroundImage: MemoryImage(base64Decode(profileImageBase64!)),
+        );
+      } catch (_) {}
+    }
+
+    final safeIndex = avatarIndex.clamp(0, _avatars.length - 1);
+    return CircleAvatar(
+      radius: 20,
+      child: Text(
+        _avatars[safeIndex].emoji,
+        style: const TextStyle(fontSize: 22),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 12),
+      child: Container(
+        width: 210,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          border: Border.all(
+            color: Theme.of(context).colorScheme.outlineVariant,
+          ),
+        ),
+        child: Row(
+          children: [
+            _avatar(context),
+            const SizedBox(width: 9),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name.isEmpty ? (isGuest ? 'Guest' : 'User') : name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    isGuest ? 'Guest Mode' : 'NEXA User',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
 // MESSAGE BUBBLE
 // ============================================================
 
 class MessageBubble extends StatelessWidget {
   final ChatMessage message;
+  final Future<void> Function(String text) onSpeak;
 
   const MessageBubble({
     super.key,
     required this.message,
+    required this.onSpeak,
   });
 
   @override
   Widget build(BuildContext context) {
-    final isUser =
-        message.isUser;
+    final isUser = message.isUser;
 
     return Align(
       alignment: isUser
           ? Alignment.centerRight
           : Alignment.centerLeft,
       child: Container(
-        constraints:
-            const BoxConstraints(
-          maxWidth: 800,
-        ),
-        margin:
-            const EdgeInsets.only(
-          bottom: 12,
-        ),
-        padding:
-            const EdgeInsets.all(15),
-        decoration:
-            BoxDecoration(
+        constraints: const BoxConstraints(maxWidth: 800),
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(15),
+        decoration: BoxDecoration(
           color: isUser
-              ? Theme.of(context)
-                  .colorScheme
-                  .primaryContainer
-              : Theme.of(context)
-                  .colorScheme
-                  .surfaceContainerHighest,
-          borderRadius:
-              BorderRadius.circular(
-            18,
-          ),
+              ? Theme.of(context).colorScheme.primaryContainer
+              : Theme.of(context).colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(18),
         ),
         child: isUser
             ? Text(message.text)
-            : MarkdownBody(
-                data: message.text,
-                selectable: true,
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  MarkdownBody(
+                    data: message.text,
+                    selectable: true,
+                  ),
+                  const SizedBox(height: 4),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: IconButton(
+                      tooltip: 'Read this answer again',
+                      onPressed: () => onSpeak(message.text),
+                      icon: const Icon(Icons.volume_up_outlined),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                  ),
+                ],
               ),
       ),
     );
@@ -2053,7 +2355,7 @@ class SettingsPage extends StatelessWidget {
 
         const Center(
           child: Text(
-            'NEXA AI • Version 4.0',
+            'NEXA AI • Version 4.12.2',
             style: TextStyle(
               fontWeight:
                   FontWeight.bold,

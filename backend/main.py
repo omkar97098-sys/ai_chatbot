@@ -55,6 +55,120 @@ OPENROUTER_URL = (
 
 
 # =========================================================
+# SMART WEB SEARCH DETECTION
+# =========================================================
+
+def needs_web_search(message: str) -> bool:
+    """
+    Decide whether the user's question probably needs
+    current/live information from the web.
+    """
+
+    message_lower = message.lower().strip()
+
+    web_keywords = [
+        # News / current events
+        "latest",
+        "latest news",
+        "today's news",
+        "todays news",
+        "today news",
+        "current news",
+        "breaking news",
+        "breaking",
+        "news today",
+        "recent news",
+        "recently",
+
+        # Time-sensitive information
+        "today",
+        "todays",
+        "current",
+        "currently",
+        "right now",
+        "live",
+        "recent",
+        "this week",
+        "this month",
+        "this year",
+        "happening now",
+        "what is happening",
+        "what's happening",
+
+        # Updates
+        "latest update",
+        "latest updates",
+        "current update",
+        "current updates",
+        "recent update",
+        "recent updates",
+
+        # Technology / AI news
+        "latest ai",
+        "latest ai news",
+        "latest technology news",
+        "latest tech news",
+        "ai news today",
+        "technology news today",
+        "tech news today",
+
+        # Weather
+        "weather",
+        "temperature today",
+        "weather today",
+        "weather tomorrow",
+        "forecast",
+
+        # Finance / markets
+        "stock price",
+        "share price",
+        "stock market",
+        "market price",
+        "share market",
+        "bitcoin price",
+        "crypto price",
+        "cryptocurrency price",
+        "exchange rate",
+        "currency rate",
+        "price today",
+
+        # Sports
+        "live score",
+        "live scores",
+        "latest score",
+        "latest scores",
+        "match today",
+        "matches today",
+        "game today",
+        "games today",
+        "score today",
+
+        # Trending
+        "trending",
+        "trending now",
+        "what's trending",
+        "what is trending",
+
+        # Current people / positions
+        "who is the current",
+        "current president",
+        "current prime minister",
+        "current ceo",
+
+        # General live information
+        "what happened today",
+        "what happened recently",
+        "what happened this week",
+        "what happened this month",
+    ]
+
+    return any(
+        keyword in message_lower
+        for keyword in web_keywords
+    )
+
+
+# =========================================================
 # Home endpoint
 # =========================================================
 
@@ -237,6 +351,40 @@ def chat(message: str):
     try:
 
         # -------------------------------------------------
+        # Decide whether web search is needed
+        # -------------------------------------------------
+
+        use_web_search = needs_web_search(message)
+
+        # -------------------------------------------------
+        # Create basic OpenRouter request
+        # -------------------------------------------------
+
+        request_data = {
+            "model": "openrouter/free",
+
+            "messages": [
+                {
+                    "role": "user",
+                    "content": message
+                }
+            ]
+        }
+
+        # -------------------------------------------------
+        # Add web search ONLY when needed
+        # -------------------------------------------------
+
+        if use_web_search:
+
+            request_data["plugins"] = [
+                {
+                    "id": "web",
+                    "max_results": 3
+                }
+            ]
+
+        # -------------------------------------------------
         # Send request to OpenRouter
         # -------------------------------------------------
 
@@ -248,23 +396,7 @@ def chat(message: str):
                 "Content-Type": "application/json"
             },
 
-            json={
-                "model": "openrouter/free",
-
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": message
-                    }
-                ],
-
-                "plugins": [
-                    {
-                        "id": "web",
-                        "max_results": 3
-                    }
-                ]
-            },
+            json=request_data,
 
             timeout=60
         )
